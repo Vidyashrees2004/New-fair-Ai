@@ -1,0 +1,13 @@
+streamlit==1.54.0
+pandas
+numpy
+scikit-learn
+joblib
+shap
+plotly
+codecarbon
+psutil
+lightgbm
+fairlearn
+matplotlib
+seaborn
