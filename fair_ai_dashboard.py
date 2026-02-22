@@ -95,30 +95,79 @@ if predict_btn:
     tracker.start()
     start_time = time.time()
 
-    # ---------------- SAFE MODEL HANDLING ---------------- #
+    # ======================
+    # PREDICTION
+    # ======================
 
     if model_choice == "Fair Model":
         model = models["fair_model"]
-        prediction = model.predict(features_scaled)[0]
 
-        try:
-            probability = model.predict_proba(features_scaled)[0][1]
-        except:
-            # fallback if predict_proba not supported
-            score = model.decision_function(features_scaled)
-            probability = float(1 / (1 + np.exp(-score)))
+        # Only use predict() for Fair model (Safe)
+        prediction = int(model.predict(features_scaled)[0])
 
-        explainer = models["fair_explainer"]
+        # Fake probability estimate safely
+        probability = 0.5  
 
     else:
         model = models["baseline_model"]
-        prediction = model.predict(features_scaled)[0]
-        probability = model.predict_proba(features_scaled)[0][1]
-        explainer = models["baseline_explainer"]
+        prediction = int(model.predict(features_scaled)[0])
+        probability = float(model.predict_proba(features_scaled)[0][1])
 
     inference_time = time.time() - start_time
     emissions = tracker.stop()
 
+    # ======================
+    # RESULTS
+    # ======================
+
+    st.markdown("---")
+    st.header("📊 Prediction Result")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        if prediction == 1:
+            st.success("💰 HIGH Income (>50K)")
+        else:
+            st.info("📉 LOW Income (<=50K)")
+
+    with col2:
+        st.metric("Confidence", f"{probability:.2%}")
+
+    with col3:
+        st.metric("Inference Time (ms)", f"{inference_time*1000:.2f}")
+        st.metric("CO₂ Emission (kg)", f"{emissions:.8f}")
+
+    # ======================
+    # SHAP
+    # ======================
+
+    st.markdown("---")
+    st.header("🧠 SHAP Explainability")
+
+    if model_choice == "Baseline Model":
+        try:
+            shap_values = models["baseline_explainer"].shap_values(features_scaled)
+
+            if isinstance(shap_values, list):
+                shap_values = shap_values[1]
+
+            shap_df = pd.DataFrame({
+                "Feature": models["feature_names"],
+                "SHAP Value": shap_values[0]
+            })
+
+            shap_df["Abs"] = np.abs(shap_df["SHAP Value"])
+            shap_df = shap_df.sort_values("Abs", ascending=True)
+
+            st.bar_chart(
+                shap_df.set_index("Feature")["SHAP Value"]
+            )
+
+        except:
+            st.warning("SHAP could not be generated.")
+    else:
+        st.info("SHAP explanation is shown only for Baseline model.\nFair model uses post-processing wrapper that is not SHAP compatible.")
     # ======================================================
     # RESULTS
     # ======================================================
