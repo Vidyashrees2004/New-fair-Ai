@@ -118,51 +118,57 @@ if predict_btn:
         st.metric("Inference Time (ms)", f"{inference_time*1000:.2f}")
         st.metric("CO₂ Emission (kg)", f"{emissions:.8f}")
 
-    # -------------------------------------------------
-    # SHAP Explainability
-    # -------------------------------------------------
-    st.markdown("---")
-    st.header("🧠 Model Explainability")
+   # -------------------------------------------------
+# SHAP Explainability (Universal – Works for Any Model)
+# -------------------------------------------------
+st.markdown("---")
+st.header("🧠 Model Explainability")
 
-    try:
-        # Choose model to explain
-        if "Baseline" in model_choice:
-            model_to_explain = models["baseline_model"]
-        else:
-            fair_model = models["fair_model"]
-            if hasattr(fair_model, "predictors_"):
-                model_to_explain = fair_model.predictors_[0]
-            else:
-                model_to_explain = fair_model
+try:
+    # Select model
+    if "Baseline" in model_choice:
+        model_to_explain = models["baseline_model"]
+    else:
+        model_to_explain = models["fair_model"]
 
-        explainer = shap.TreeExplainer(model_to_explain)
-        shap_values = explainer.shap_values(features_scaled)
+    # Use background data (small sample)
+    background = models["X_test_scaled"][:100]
 
-        if isinstance(shap_values, list):
-            shap_values = shap_values[1]
+    explainer = shap.Explainer(model_to_explain.predict, background)
+    shap_values = explainer(features_scaled)
 
-        shap_values = shap_values[0]
+    shap_df = pd.DataFrame({
+        "Feature": models["feature_names"],
+        "SHAP Value": shap_values.values[0]
+    })
 
-        shap_df = pd.DataFrame({
-            "Feature": models["feature_names"],
-            "SHAP Value": shap_values
-        }).sort_values(by="SHAP Value")
+    shap_df["Impact"] = np.where(
+        shap_df["SHAP Value"] > 0,
+        "Increases Income",
+        "Decreases Income"
+    )
 
-        st.bar_chart(shap_df.set_index("Feature")["SHAP Value"])
+    shap_df = shap_df.sort_values(by="SHAP Value")
 
-        # Explanation Text
-        top_positive = shap_df.sort_values("SHAP Value", ascending=False).iloc[0]
-        top_negative = shap_df.iloc[0]
+    st.bar_chart(shap_df.set_index("Feature")["SHAP Value"])
 
-        st.subheader("📌 Explanation")
-        st.write(f"🔺 **{top_positive['Feature']}** increases likelihood of HIGH income.")
-        st.write(f"🔻 **{top_negative['Feature']}** pushes prediction toward LOW income.")
+    st.subheader("📌 Detailed Explanation")
+    st.dataframe(shap_df)
 
-        if "Fair" in model_choice:
-            st.caption("Fair model explanation is derived from underlying base learner.")
+    # Dynamic explanation
+    highest = shap_df.iloc[-1]
+    lowest = shap_df.iloc[0]
 
-    except Exception:
-        st.warning("SHAP explanation could not be generated.")
+    st.write(
+        f"🔺 {highest['Feature']} is the strongest factor increasing prediction."
+    )
+
+    st.write(
+        f"🔻 {lowest['Feature']} is the strongest factor decreasing prediction."
+    )
+
+except Exception as e:
+    st.warning("SHAP explanation could not be generated.")
 
 # -------------------------------------------------
 # Model Comparison Section
