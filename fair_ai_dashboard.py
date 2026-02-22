@@ -69,8 +69,18 @@ if predict_btn:
     gender_num = 1 if gender == "Male" else 0
     race_num = 1 if race == "White" else 0
 
-    features = np.array([[age, education, hours, gender_num, race_num]])
-    features_scaled = models["scaler"].transform(features)
+   input_dict = {
+    "age": age,
+    "education-num": education,
+    "hours-per-week": hours,
+    "sex": gender_num,
+    "race": race_num
+}
+
+features_df = pd.DataFrame([input_dict])
+features = features_df[models["feature_names"]].values
+features_scaled = models["scaler"].transform(features)
+  
 
     tracker = EmissionsTracker(save_to_file=False)
     tracker.start()
@@ -123,31 +133,54 @@ st.header("🧠 Model Explainability")
 
 try:
     if "Baseline" in model_choice:
-        base_model = models["baseline_model"]
+        model_to_explain = models["baseline_model"]
     else:
-        # Extract base learner from Fair model
         fair_model = models["fair_model"]
         if hasattr(fair_model, "predictors_"):
-            base_model = fair_model.predictors_[0]
+            model_to_explain = fair_model.predictors_[0]
         else:
-            base_model = fair_model
+            model_to_explain = fair_model
 
-    # Use TreeExplainer for tree-based models
-    explainer = shap.TreeExplainer(base_model)
+    explainer = shap.TreeExplainer(model_to_explain)
     shap_values = explainer.shap_values(features_scaled)
 
     if isinstance(shap_values, list):
         shap_values = shap_values[1]
 
+    shap_values = shap_values[0]
+
     shap_df = pd.DataFrame({
         "Feature": models["feature_names"],
-        "SHAP Value": shap_values[0]
-    }).sort_values(by="SHAP Value")
+        "SHAP Value": shap_values
+    })
 
-    st.bar_chart(shap_df.set_index("Feature"))
+    shap_df["Impact"] = np.where(
+        shap_df["SHAP Value"] > 0,
+        "Increases Income Prediction",
+        "Decreases Income Prediction"
+    )
 
-    if "Fair" in model_choice:
-        st.caption("Note: SHAP explains the base LightGBM model inside the fairness wrapper.")
+    shap_df = shap_df.sort_values(by="SHAP Value")
+
+    st.dataframe(shap_df)
+
+    st.bar_chart(
+        shap_df.set_index("Feature")["SHAP Value"]
+    )
+
+    # ---------------- Interpretation ---------------- #
+    st.subheader("📌 Interpretation")
+
+    top_positive = shap_df.sort_values(by="SHAP Value", ascending=False).iloc[0]
+    top_negative = shap_df.sort_values(by="SHAP Value").iloc[0]
+
+    st.write(
+        f"🔺 **{top_positive['Feature']}** is increasing the chance of HIGH income."
+    )
+
+    st.write(
+        f"🔻 **{top_negative['Feature']}** is pushing prediction towards LOW income."
+    )
 
 except Exception as e:
     st.warning("SHAP explanation could not be generated.")
