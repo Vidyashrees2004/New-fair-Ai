@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from plotly.subplots import make_subplots
 import shap
 import joblib
 import time
@@ -12,12 +11,12 @@ from codecarbon import EmissionsTracker
 
 st.set_page_config(page_title="Fair AI Dashboard", page_icon="🤖", layout="wide")
 
-st.markdown("## 🎯 Fair AI Dashboard")
-st.markdown("### Model Explainability + Energy Tracking + Fairness Metrics")
+st.title("🎯 Fair AI Dashboard")
+st.subheader("Model Explainability + Energy Tracking + Fairness Metrics")
 
-# =========================
+# ==========================================================
 # LOAD MODELS
-# =========================
+# ==========================================================
 
 @st.cache_resource
 def load_models():
@@ -30,14 +29,13 @@ def load_models():
         y_test = joblib.load("models/y_test.pkl")
         sens_test = joblib.load("models/sens_test.pkl")
 
-        # 🔥 FIXED SHAP HANDLING
+        # Extract LightGBM from Fair model
         if hasattr(fair_model, "predictors_"):
-            fair_base_model = fair_model.predictors_[0]
+            fair_base = fair_model.predictors_[0]
         else:
-            fair_base_model = fair_model
+            fair_base = fair_model
 
-        fair_explainer = shap.TreeExplainer(fair_base_model)
-
+        fair_explainer = shap.TreeExplainer(fair_base)
         baseline_explainer = shap.TreeExplainer(baseline_model)
 
         return {
@@ -61,12 +59,12 @@ models = load_models()
 if models is None:
     st.stop()
 
-# =========================
+# ==========================================================
 # SIDEBAR
-# =========================
+# ==========================================================
 
 with st.sidebar:
-    st.title("⚙️ Controls")
+    st.header("⚙️ Controls")
 
     model_choice = st.radio(
         "Select Model",
@@ -82,11 +80,11 @@ with st.sidebar:
     gender_num = 1 if gender == "Male" else 0
     race_num = 1 if race == "White" else 0
 
-    predict_btn = st.button("🚀 Run Prediction")
+    predict_btn = st.button("🚀 Run Prediction", use_container_width=True)
 
-# =========================
+# ==========================================================
 # PREDICTION
-# =========================
+# ==========================================================
 
 if predict_btn:
 
@@ -97,11 +95,21 @@ if predict_btn:
     tracker.start()
     start_time = time.time()
 
+    # ---------------- SAFE MODEL HANDLING ---------------- #
+
     if model_choice == "Fair Model":
         model = models["fair_model"]
         prediction = model.predict(features_scaled)[0]
-        probability = model.predict_proba(features_scaled)[0][1]
+
+        try:
+            probability = model.predict_proba(features_scaled)[0][1]
+        except:
+            # fallback if predict_proba not supported
+            score = model.decision_function(features_scaled)
+            probability = float(1 / (1 + np.exp(-score)))
+
         explainer = models["fair_explainer"]
+
     else:
         model = models["baseline_model"]
         prediction = model.predict(features_scaled)[0]
@@ -111,9 +119,9 @@ if predict_btn:
     inference_time = time.time() - start_time
     emissions = tracker.stop()
 
-    # =========================
+    # ======================================================
     # RESULTS
-    # =========================
+    # ======================================================
 
     st.markdown("---")
     st.header("📊 Prediction Result")
@@ -121,7 +129,6 @@ if predict_btn:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.subheader("Income Prediction")
         if prediction == 1:
             st.success("💰 HIGH Income (>50K)")
         else:
@@ -132,55 +139,56 @@ if predict_btn:
 
     with col3:
         st.metric("Inference Time (ms)", f"{inference_time*1000:.2f}")
-        st.metric("CO₂ Emissions (kg)", f"{emissions:.8f}")
+        st.metric("CO₂ Emission (kg)", f"{emissions:.8f}")
 
-    # =========================
-    # SHAP
-    # =========================
+    # ======================================================
+    # SHAP (SAFE)
+    # ======================================================
 
     st.markdown("---")
     st.header("🧠 SHAP Explainability")
 
-    shap_values = explainer.shap_values(features_scaled)
+    try:
+        shap_values = explainer.shap_values(features_scaled)
 
-    if isinstance(shap_values, list):
-        shap_values = shap_values[1]
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1] if len(shap_values) > 1 else shap_values[0]
 
-    shap_df = pd.DataFrame({
-        "Feature": models["feature_names"],
-        "SHAP Value": shap_values[0]
-    })
+        shap_df = pd.DataFrame({
+            "Feature": models["feature_names"],
+            "SHAP Value": shap_values[0]
+        })
 
-    shap_df["Abs"] = np.abs(shap_df["SHAP Value"])
-    shap_df = shap_df.sort_values("Abs", ascending=True)
+        shap_df["Abs"] = np.abs(shap_df["SHAP Value"])
+        shap_df = shap_df.sort_values("Abs", ascending=True)
 
-    fig = go.Figure()
+        colors = ["#00cc96" if x > 0 else "#EF553B" for x in shap_df["SHAP Value"]]
 
-    colors = ["#00cc96" if x > 0 else "#EF553B" for x in shap_df["SHAP Value"]]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=shap_df["Feature"],
+            x=shap_df["SHAP Value"],
+            orientation="h",
+            marker_color=colors
+        ))
 
-    fig.add_trace(go.Bar(
-        y=shap_df["Feature"],
-        x=shap_df["SHAP Value"],
-        orientation="h",
-        marker_color=colors
-    ))
+        fig.update_layout(
+            height=400,
+            title="Feature Contribution to Prediction",
+            showlegend=False
+        )
 
-    fig.update_layout(
-        height=400,
-        title="Feature Contribution",
-        xaxis_title="SHAP Value",
-        yaxis_title="Feature",
-        showlegend=False
-    )
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.plotly_chart(fig, use_container_width=True)
+    except Exception:
+        st.warning("SHAP explanation not available for this input.")
 
-# =========================
+# ==========================================================
 # MODEL COMPARISON
-# =========================
+# ==========================================================
 
 st.markdown("---")
-st.header("📈 Model Comparison")
+st.header("📈 Model Performance Comparison")
 
 from sklearn.metrics import accuracy_score
 from fairlearn.metrics import demographic_parity_difference
