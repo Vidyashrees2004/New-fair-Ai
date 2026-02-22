@@ -8,18 +8,19 @@ from codecarbon import EmissionsTracker
 from sklearn.metrics import accuracy_score
 from fairlearn.metrics import demographic_parity_difference
 
+# -------------------------------------------------
+# Page Config
+# -------------------------------------------------
 st.set_page_config(page_title="Fair AI Dashboard", page_icon="🎯", layout="wide")
 
 st.title("🎯 Fair AI Dashboard")
 st.subheader("Explainable + Fair + Sustainable AI")
 
-# ==========================================================
-# LOAD MODELS
-# ==========================================================
-
+# -------------------------------------------------
+# Load Models
+# -------------------------------------------------
 @st.cache_resource
 def load_models():
-
     fair_model = joblib.load("models/fair_model.pkl")
     baseline_model = joblib.load("models/baseline_model.pkl")
     scaler = joblib.load("models/scaler.pkl")
@@ -40,10 +41,9 @@ def load_models():
 
 models = load_models()
 
-# ==========================================================
-# SIDEBAR
-# ==========================================================
-
+# -------------------------------------------------
+# Sidebar
+# -------------------------------------------------
 with st.sidebar:
     st.header("⚙ Controls")
 
@@ -60,36 +60,33 @@ with st.sidebar:
 
     predict_btn = st.button("🚀 Run Prediction")
 
-# ==========================================================
-# PREDICTION
-# ==========================================================
-
+# -------------------------------------------------
+# Prediction Block
+# -------------------------------------------------
 if predict_btn:
 
     gender_num = 1 if gender == "Male" else 0
     race_num = 1 if race == "White" else 0
 
-   input_dict = {
-    "age": age,
-    "education-num": education,
-    "hours-per-week": hours,
-    "sex": gender_num,
-    "race": race_num
-}
+    # Ensure correct feature order from saved feature_names
+    input_dict = {
+        "age": age,
+        "education-num": education,
+        "hours-per-week": hours,
+        "sex": gender_num,
+        "race": race_num
+    }
 
-features_df = pd.DataFrame([input_dict])
-features = features_df[models["feature_names"]].values
-features_scaled = models["scaler"].transform(features)
-  
+    features_df = pd.DataFrame([input_dict])
+    features = features_df[models["feature_names"]].values
+    features_scaled = models["scaler"].transform(features)
 
+    # Energy tracking
     tracker = EmissionsTracker(save_to_file=False)
     tracker.start()
-    start = time.time()
+    start_time = time.time()
 
-    # -------------------
-    # MODEL SELECTION
-    # -------------------
-
+    # ---------------- MODEL PREDICTION ----------------
     if "Baseline" in model_choice:
         model = models["baseline_model"]
         prediction = model.predict(features_scaled)[0]
@@ -97,15 +94,12 @@ features_scaled = models["scaler"].transform(features)
     else:
         model = models["fair_model"]
         prediction = model.predict(features_scaled)[0]
-        probability = 0.5  # safe fallback
+        probability = 0.5  # safe placeholder
 
-    inference_time = time.time() - start
+    inference_time = time.time() - start_time
     emissions = tracker.stop()
 
-    # ==================================================
-    # SHOW RESULTS (ONLY ONCE)
-    # ==================================================
-
+    # ---------------- OUTPUT ----------------
     st.markdown("---")
     st.header("📊 Prediction Result")
 
@@ -115,7 +109,7 @@ features_scaled = models["scaler"].transform(features)
         if prediction == 1:
             st.success("💰 HIGH Income (>50K)")
         else:
-            st.info("📉 LOW Income (<=50K)")
+            st.info("📉 LOW Income (≤50K)")
 
     with col2:
         st.metric("Confidence", f"{probability:.2%}")
@@ -124,73 +118,57 @@ features_scaled = models["scaler"].transform(features)
         st.metric("Inference Time (ms)", f"{inference_time*1000:.2f}")
         st.metric("CO₂ Emission (kg)", f"{emissions:.8f}")
 
-  # ==================================================
-# SHAP EXPLAINABILITY (BASELINE + FAIR)
-# ==================================================
+    # -------------------------------------------------
+    # SHAP Explainability
+    # -------------------------------------------------
+    st.markdown("---")
+    st.header("🧠 Model Explainability")
 
-st.markdown("---")
-st.header("🧠 Model Explainability")
-
-try:
-    if "Baseline" in model_choice:
-        model_to_explain = models["baseline_model"]
-    else:
-        fair_model = models["fair_model"]
-        if hasattr(fair_model, "predictors_"):
-            model_to_explain = fair_model.predictors_[0]
+    try:
+        # Choose model to explain
+        if "Baseline" in model_choice:
+            model_to_explain = models["baseline_model"]
         else:
-            model_to_explain = fair_model
+            fair_model = models["fair_model"]
+            if hasattr(fair_model, "predictors_"):
+                model_to_explain = fair_model.predictors_[0]
+            else:
+                model_to_explain = fair_model
 
-    explainer = shap.TreeExplainer(model_to_explain)
-    shap_values = explainer.shap_values(features_scaled)
+        explainer = shap.TreeExplainer(model_to_explain)
+        shap_values = explainer.shap_values(features_scaled)
 
-    if isinstance(shap_values, list):
-        shap_values = shap_values[1]
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1]
 
-    shap_values = shap_values[0]
+        shap_values = shap_values[0]
 
-    shap_df = pd.DataFrame({
-        "Feature": models["feature_names"],
-        "SHAP Value": shap_values
-    })
+        shap_df = pd.DataFrame({
+            "Feature": models["feature_names"],
+            "SHAP Value": shap_values
+        }).sort_values(by="SHAP Value")
 
-    shap_df["Impact"] = np.where(
-        shap_df["SHAP Value"] > 0,
-        "Increases Income Prediction",
-        "Decreases Income Prediction"
-    )
+        st.bar_chart(shap_df.set_index("Feature")["SHAP Value"])
 
-    shap_df = shap_df.sort_values(by="SHAP Value")
+        # Explanation Text
+        top_positive = shap_df.sort_values("SHAP Value", ascending=False).iloc[0]
+        top_negative = shap_df.iloc[0]
 
-    st.dataframe(shap_df)
+        st.subheader("📌 Explanation")
+        st.write(f"🔺 **{top_positive['Feature']}** increases likelihood of HIGH income.")
+        st.write(f"🔻 **{top_negative['Feature']}** pushes prediction toward LOW income.")
 
-    st.bar_chart(
-        shap_df.set_index("Feature")["SHAP Value"]
-    )
+        if "Fair" in model_choice:
+            st.caption("Fair model explanation is derived from underlying base learner.")
 
-    # ---------------- Interpretation ---------------- #
-    st.subheader("📌 Interpretation")
+    except Exception:
+        st.warning("SHAP explanation could not be generated.")
 
-    top_positive = shap_df.sort_values(by="SHAP Value", ascending=False).iloc[0]
-    top_negative = shap_df.sort_values(by="SHAP Value").iloc[0]
-
-    st.write(
-        f"🔺 **{top_positive['Feature']}** is increasing the chance of HIGH income."
-    )
-
-    st.write(
-        f"🔻 **{top_negative['Feature']}** is pushing prediction towards LOW income."
-    )
-
-except Exception as e:
-    st.warning("SHAP explanation could not be generated.")
-
-# ==========================================================
-# MODEL COMPARISON
-# ==========================================================
-
+# -------------------------------------------------
+# Model Comparison Section
+# -------------------------------------------------
 st.markdown("---")
-st.header("📈 Model Comparison")
+st.header("📈 Model Performance Comparison")
 
 fair_pred = models["fair_model"].predict(models["X_test_scaled"])
 baseline_pred = models["baseline_model"].predict(models["X_test_scaled"])
@@ -199,19 +177,22 @@ fair_acc = accuracy_score(models["y_test"], fair_pred)
 baseline_acc = accuracy_score(models["y_test"], baseline_pred)
 
 fair_gap = demographic_parity_difference(
-    models["y_test"], fair_pred, sensitive_features=models["sens_test"]
-)
-baseline_gap = demographic_parity_difference(
-    models["y_test"], baseline_pred, sensitive_features=models["sens_test"]
+    models["y_test"], fair_pred,
+    sensitive_features=models["sens_test"]
 )
 
-comparison = pd.DataFrame({
+baseline_gap = demographic_parity_difference(
+    models["y_test"], baseline_pred,
+    sensitive_features=models["sens_test"]
+)
+
+comparison_df = pd.DataFrame({
     "Model": ["Baseline", "Fair"],
     "Accuracy": [baseline_acc, fair_acc],
     "Fairness Gap": [baseline_gap, fair_gap]
 })
 
-st.dataframe(comparison)
+st.dataframe(comparison_df)
 
 st.metric(
     "Fairness Improvement",
